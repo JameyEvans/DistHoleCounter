@@ -19,7 +19,7 @@ ufSize 4096 -featureType LBP
 
 annotations:
 opencv_annotation --annotations=C:\Dev\openCV\Cascade\outsideDiamete
-r\pos\edits\annotations.txt --images=C:\Dev\openCV\Cascade\outsideDiameter\pos\edits --maxWindowHeight=600 --resizeFactor=3
+r\pos\edits\annotations.txt --images=C:\Dev\openCV\Cascade\outsideDiameter\pos\edits --maxWindowHeight=600 --resizeFactor=4
 
 
 .\GenerateNegatives.exe -annotations C:\Dev\openCV\Cascade\fullDist\pos\edits\annotations.txt -output C:\D
