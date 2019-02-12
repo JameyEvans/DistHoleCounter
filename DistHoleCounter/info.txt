@@ -1,0 +1,26 @@
+negatives directory: C:\Dev\openCV\Cascade\fullDist\neg\edits
+bg: C:\Dev\openCV\Cascade\fullDist\negatives.txt
+positives: C:\Dev\openCV\Cascade\fullDist\info.dat
+vec: distvec020619
+
+
+CMD prompt script to list all files in directory
+dir *.* /s /b /a:-d > filelist.txt
+
+powershell script to rename files in current directory
+$i = 1
+Get-ChildItem *.jpg | %{Rename-Item $_ -NewName ('dist{0}.jpg' -f $i++)}
+
+
+opencv_createsamples -info info.dat -vec distvec020619.vec -bg negatives.txt -num 2000 -w 40 -h 40 -show
+
+opencv_traincascade -data info -vec distvec020619.vec -bg negatives.txt -w 40 -h 40 -numPos 1888 -numNeg 2000 -precalcValBufSize 4096 -precalcIdxB
+ufSize 4096 -featureType LBP
+
+annotations:
+opencv_annotation --annotations=C:\Dev\openCV\Cascade\outsideDiamete
+r\pos\edits\annotations.txt --images=C:\Dev\openCV\Cascade\outsideDiameter\pos\edits --maxWindowHeight=600 --resizeFactor=3
+
+
+.\GenerateNegatives.exe -annotations C:\Dev\openCV\Cascade\fullDist\pos\edits\annotations.txt -output C:\D
+ev\openCV\Cascade\fullDist\neg\edits\newNegs\
