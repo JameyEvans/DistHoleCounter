@@ -7,6 +7,7 @@
 #include <math.h>
 #include <iterator>
 #include "circlefit.hh"
+#include <unordered_map>
 
 
 
@@ -26,29 +27,41 @@ public:
 	bool valid;
 	int nearNeighbors;
 	int numDetections;
+	int quad;
+	
 
 	Hole() {
 		valid = true;
 		nearNeighbors = 0;
 		numDetections = 0;
+		quad = 0;
 	}
 
-	
+
 };
 
+
 void detectAndDisplay(Mat frame);
-void detectAndDisplay2(Mat frame);
 int PtDistance(const Point& center1, const Point& center2);
+
 vector<Hole> GetGoodHoles(vector<Rect> circuits, vector<int>& numDetections);
 int AverageDia(vector<Hole>& holeLst);
 bool compareRectSize(Hole i, Hole j);
+bool detectNumSort(Hole i, Hole j);
+bool sortQuad(Hole i, Hole j);
+void orderByQuad(vector<Hole>& goodHoles, circle_fit::circle_t& pcd);
 circle_fit::circle_t getCircle(vector<Hole> &holeLst);
+string getHoleSize(const int& d);
+int estimateHoleCount(vector<Hole>& goodHoles, circle_fit::circle_t& circle);
+Point GetTextPoint(Hole& hole, circle_fit::circle_t& circle);
 
 
 CascadeClassifier circuit_cascade;
 string imageName;
 vector<int> avgSizeLst;
 ofstream logFile;
+circle_fit::circle_t pcd;
+int d;
 
 
 
@@ -56,15 +69,14 @@ ofstream logFile;
 int main(int argc, const char** argv)
 {
 	String circuit_cascade_name = "./cascade.xml";
-	//String circuit_cascade_name = "./lbpCascade2020_11stages_5000negs.xml";
-	String eyes_cascade_name = "./haarcascade_eye_tree_eyeglasses.xml";
+
 	//-- 1. Load the cascades
 	if (!circuit_cascade.load(circuit_cascade_name))
 	{
 		cout << "--(!)Error loading distributor cascade\n";
 		return -1;
 	};
-	
+
 	logFile.open("log.txt");
 
 	Mat frame;
@@ -72,26 +84,15 @@ int main(int argc, const char** argv)
 
 	for (int i = 1; i < 200; i++)
 	{
-		
-
 		imageName = path + "/dist" + to_string(i) + ".jpg";
-		//string imageName = entry.path().string();
 		frame = imread(imageName, IMREAD_COLOR);
 		if (frame.empty()) {
 			cout << "--(!) No captured frame -- Break!\n";
 			break;
 		}
-		resize(frame, frame, Size(frame.cols / 2.5, frame.rows / 2.5));
+		resize(frame, frame, Size(frame.cols / 3, frame.rows / 3));
 		Mat frameOrg = frame.clone();
-		//putText(frame, imageName,Point(20,300), FONT_HERSHEY_SIMPLEX, 6, Scalar(51, 153, 45), 5);
-		//resize(frame, frame, Size(), 0.5, 0.5);
-		if (frame.empty()) {
-			cout << "--(!) No captured frame -- Break!\n";
-			break;
-		}
-		//detectHoughCircles(frame);
-		detectAndDisplay2(frame);
-		//detectAndDisplay(frameOrg);
+		detectAndDisplay(frame);
 		waitKey(0);
 		cvDestroyWindow(imageName.c_str());
 	}
@@ -102,39 +103,6 @@ int main(int argc, const char** argv)
 
 	return 0;
 }
-void detectAndDisplay(Mat frame)
-{
-	Mat frame_gray;
-	cvtColor(frame, frame_gray, COLOR_BGR2GRAY);
-	equalizeHist(frame_gray, frame_gray);
-	ofstream logFile;
-	logFile.open("log.txt");
-
-	//-- Detect circuit holes in distributor
-	std::vector<Rect> circuits;
-	circuit_cascade.detectMultiScale(frame_gray, circuits, 1.05, 2, 0, Size(50, 50), Size(300, 300));
-	int holeCount = 0;
-	for (size_t i = 0; i < circuits.size(); i++)
-	{
-		Point center(circuits[i].x + circuits[i].width / 2, circuits[i].y + circuits[i].height / 2);
-		logFile << "id " + to_string(i + 1) + ": ";
-		logFile << "(" + to_string(center.x) + ", " + to_string(center.y) + ")\n";
-		holeCount++;
-		String textBox = to_string(holeCount);
-		Size textSize = getTextSize(textBox, FONT_HERSHEY_SIMPLEX, 1, 2, 0);
-		Point textLoc = Point(center.x - textSize.width, center.y + (textSize.height / 2));
-		putText(frame, textBox, textLoc, FONT_HERSHEY_SIMPLEX, 2, Scalar(51, 153, 45), 3);
-		ellipse(frame, center, Size(circuits[i].width / 2, circuits[i].height / 2), 0, 0, 360, Scalar(255, 0, 255), 7);
-	}
-
-	//-- Show what you got
-	logFile.close();
-	putText(frame, "Detected Hole Count = " + to_string(holeCount), Point(50, 50), FONT_HERSHEY_SIMPLEX, 2, Scalar(51, 153, 45), 7, 8, false);
-	resize(frame, frame, Size(frame.cols / 4, frame.rows / 4));
-	namedWindow("Capture - Face detection", CV_WINDOW_AUTOSIZE);
-	imshow("Capture - Face detection", frame);
-}
-
 
 
 static int PtDistance(const Point& center1, const Point& center2)
@@ -166,41 +134,52 @@ vector<Hole> GetGoodHoles(vector<Rect> circuits, vector<int>& numDetections)
 		potCircuit.center = GetCenterPoint(circuits[i]);
 		potCircuit.numDetections = numDetections[i];
 		goodHoles.push_back(potCircuit);
-
 	}
 
+	//sort goodHoles vector by numDetections largest to smallest
+	std::sort(goodHoles.begin(), goodHoles.end(), detectNumSort);
+
+	// detect pitch circle and throw out holes out of pcd
+	pcd = getCircle(goodHoles);
+	d = AverageDia(goodHoles);
+	
+
 	// count number of near neighbors
-	int maxMeasuredDistance = 0;
+	float r = 1.5 * float(d) / 2;
 	int id = 0;
 	for (size_t j = 0; j < goodHoles.size(); j++)
 	{
+		if (goodHoles[j].valid) {
+			for (size_t k = 0; k < goodHoles.size(); k++)
+			{
 
-		for (size_t k = 0; k < goodHoles.size(); k++)
-		{
-			
-			if (j != k) {
-				int distance = PtDistance(goodHoles[j].center, goodHoles[k].center);
-				if (distance < maxAllowDistance) {
-					goodHoles[j].nearNeighbors++;
-					if (distance > maxMeasuredDistance) { maxMeasuredDistance = distance; id = j; }
+				if (j != k && goodHoles[k].valid) {
+					int distance = PtDistance(goodHoles[j].center, goodHoles[k].center);
+					if (distance < r) {
+						if (goodHoles[k].numDetections <= goodHoles[j].numDetections) {
+							goodHoles[k].valid = false;
+						}
+						else {
+							goodHoles[j].valid = false;
+						}						
+					}
 				}
 			}
 		}
 	}
-	cout << "Max measured distance = " + to_string(maxMeasuredDistance) << endl;
-	cout << "ID = " + to_string(id) << endl;
 
-	// if near neighbors < 2 then probably not a valid hole
-	for (size_t i = 0; i < goodHoles.size(); i++)
-	{
-		if (goodHoles[i].nearNeighbors < 2 && goodHoles[i].numDetections < 10) {
-			goodHoles[i].valid = false;
-		}
-	}
+
+	//// if near neighbors < 2 then probably not a valid hole
+	//for (size_t i = 0; i < goodHoles.size(); i++)
+	//{
+	//	if (goodHoles[i].nearNeighbors < 2 && goodHoles[i].numDetections < 10) {
+	//		goodHoles[i].valid = false;
+	//	}
+	//}
 	return goodHoles;
 }
 
-void detectAndDisplay2(Mat frame)
+void detectAndDisplay(Mat frame)
 {
 	Mat frame_gray;
 	cvtColor(frame, frame_gray, COLOR_BGR2GRAY);
@@ -208,20 +187,18 @@ void detectAndDisplay2(Mat frame)
 	cvtColor(frame, frame, CV_GRAY2RGB);
 	equalizeHist(frame_gray, frame_gray);
 	Mat frame_copy = frame.clone();
-	//ofstream logFile;
-	//logFile.open("log.txt");
 
 	//-- Detect circuit holes in distributor
 	std::vector<Rect> circuits;
 	std::vector<int> numDetections;
-	circuit_cascade.detectMultiScale(frame_gray, circuits, numDetections, 1.05, 1,0, Size(20, 20), Size(150, 150));   // was (50,50) and (300, 300)
+	circuit_cascade.detectMultiScale(frame_gray, circuits, numDetections, 1.05, 1, 0, Size(20, 20), Size(150, 150));   // was (50,50) and (300, 300)
 
 	vector<Hole> circuitHoles = GetGoodHoles(circuits, numDetections);
-	int averageDia = AverageDia(circuitHoles);
+	//int averageDia = AverageDia(circuitHoles);
 
 	// ---------------- Display all detections in separate window for testing -----------------------------------
 
-	for (size_t i = 0; i < circuitHoles.size(); i++)
+	/*for (size_t i = 0; i < circuitHoles.size(); i++)
 	{
 		ellipse(frame_copy, circuitHoles[i].center, Size(circuitHoles[i].rect.width / 2, circuitHoles[i].rect.height / 2), 0, 0, 360, Scalar(201, 30, 87), 3);
 		String textBox = to_string(circuitHoles[i].numDetections);
@@ -230,54 +207,50 @@ void detectAndDisplay2(Mat frame)
 		putText(frame_copy, textBox, textLoc, FONT_HERSHEY_SIMPLEX, 1, Scalar(51, 153, 45), 3);
 	}
 	namedWindow("Original Detections", 1);
-	imshow("Original Detections", frame_copy);
+	imshow("Original Detections", frame_copy);*/
 
 	// ---------------- End Test ------------------------------------------------------------------------------------
 
 	int holeCount = 0;
-	for (int i = 0; i < circuitHoles.size(); i++)
-	{
-		if (circuitHoles[i].valid) {
-			float r = (float)circuitHoles[i].rect.width / (float)averageDia;
-			if (.6 >= r || r >= 1.4) {
-				if (circuitHoles[i].numDetections < 5) {
-					circuitHoles[i].valid = false;				
-				}
-			}
-		}
-		else {
-			ellipse(frame, circuitHoles[i].center, Size(circuitHoles[i].rect.width / 2, circuitHoles[i].rect.height / 2), 0, 0, 360, Scalar(201, 30, 87),3);  //thickness was 20
-		}
-	}
-	//-- Show what you got
-	//logFile.close();
+	
 
 	// draw pitch circle
-	circle_fit::circle_t circle = getCircle(circuitHoles);
-	Point pitchCircleCenter = Point(circle.x, circle.y);
-	cv::circle(frame, pitchCircleCenter, 50, Scalar(158, 244, 66), 5);  //thickness was 8
-	ellipse(frame, pitchCircleCenter, Size(circle.r, circle.r), 0, 0, 360, Scalar(158, 244, 66), 3); // was 8
+	Point pitchCircleCenter = Point(pcd.x, pcd.y);
+	cout << "(h, k, r) = (" + to_string(pitchCircleCenter.x) + ", " + to_string(pitchCircleCenter.y) + ", " + to_string(pcd.r) + ")\n";
+	cv::circle(frame, pitchCircleCenter, 50, Scalar(158, 244, 66), 2);  //thickness was 8
+	ellipse(frame, pitchCircleCenter, Size(pcd.r, pcd.r), 0, 0, 360, Scalar(158, 244, 66), 1); // was 8
+
+	orderByQuad(circuitHoles, pcd);
 
 	for (size_t i = 0; i < circuitHoles.size(); i++)
 	{
 		if (circuitHoles[i].valid) {
 			holeCount++;
-			//cout << "id " + to_string(holeCount) + ": ";
-			//cout << "(" + to_string(circuitHoles[i].center.x) + ", " + to_string(circuitHoles[i].center.y) + ")\n";
+			cout << "id " + to_string(holeCount) + ": ";
+			cout << "(" + to_string(circuitHoles[i].center.x) + ", " + to_string(circuitHoles[i].center.y) + ", " + to_string(circuitHoles[i].rect.width)+")\n";
 			//logFile << "id " + to_string(holeCount) + ": ";
 			//logFile << "(" + to_string(circuitHoles[i].center.x) + ", " + to_string(circuitHoles[i].center.y) + ")\n";
 			String textBox = " " + to_string(holeCount);
 			Size textSize = getTextSize(textBox, FONT_HERSHEY_SIMPLEX, 1, 2, 0);
-			Point textLoc = Point(circuitHoles[i].center.x - textSize.width, circuitHoles[i].center.y + (textSize.height / 2));
-			putText(frame, textBox, textLoc, FONT_HERSHEY_SIMPLEX, 1, Scalar(51, 153, 45), 1);
+			Point textLoc = Point(circuitHoles[i].center.x - (textSize.width/2), circuitHoles[i].center.y + (textSize.height / 2));
+			//Point textLoc = GetTextPoint(circuitHoles[i], pcd);
+			putText(frame, textBox, textLoc, FONT_HERSHEY_SIMPLEX, 1, Scalar(51, 153, 45), 2);
 			ellipse(frame, circuitHoles[i].center, Size(circuitHoles[i].rect.width / 2, circuitHoles[i].rect.height / 2), 0, 0, 360, Scalar(255, 0, 255), 3); //was 20
 		}
-		
+
 	}
 
 	//putText(frame, imageName, Point(50, 50), FONT_HERSHEY_SIMPLEX, 1, Scalar(51, 153, 45), 4, 8, false);
+	rectangle(frame,Point(10,10),Point(500, 125),Scalar(255, 351, 249), FILLED);
+	int expectedHoleCount = estimateHoleCount(circuitHoles, pcd);
+	if (holeCount != expectedHoleCount) {
+		rectangle(frame, Point(50, frame.rows - 100), Point(frame.cols - 50, frame.rows), Scalar(66, 244, 226), FILLED);
+		putText(frame, "CAUTION: detected count != estimated hole count (" + to_string(estimateHoleCount(circuitHoles, pcd)) + ")", Point(50, frame.rows - 50), FONT_HERSHEY_DUPLEX, 1, Scalar(9, 43, 40), 2);
+	}
+	putText(frame, "Expected Hole Count = " + to_string(estimateHoleCount(circuitHoles, pcd)), Point(20, 150), FONT_HERSHEY_SIMPLEX, 1, Scalar(51, 153, 45), 2, 8, false);
 	putText(frame, "Detected Hole Count = " + to_string(holeCount), Point(20, 50), FONT_HERSHEY_SIMPLEX, 1, Scalar(51, 153, 45), 2, 8, false);
-	//resize(frame, frame, Size(frame.cols / 4, frame.rows / 4));
+	putText(frame, "Detected Hole Size = " + getHoleSize(d), Point(20, 100), FONT_HERSHEY_SIMPLEX, 1, Scalar(51, 153, 45), 2, 8, false);
+	resize(frame, frame, Size(frame.cols / 1.5, frame.rows / 1.5));
 	namedWindow(imageName, CV_WINDOW_AUTOSIZE);
 	imshow(imageName, frame);
 }
@@ -285,16 +258,27 @@ void detectAndDisplay2(Mat frame)
 int AverageDia(vector<Hole>& holeLst) {
 	int sum = 0;
 	int count = 0;
-	std::sort(holeLst.begin(), holeLst.end(), compareRectSize);
-	vector<Hole>::iterator iter;
-
-	for (iter = holeLst.begin() + holeLst.size() / 3; iter != (holeLst.end() - (holeLst.size() / 3)); iter++) {
-		//sum += holeLst[i].rect.width;
-		if (iter->valid && iter->numDetections > 10) {
-			sum += iter->rect.width;
+	// holeLst should be sorted by numDetections
+	
+	for (size_t i = 0; i < holeLst.size(); i++)
+	{
+		if (i < 6) {
+			sum += holeLst[i].rect.width;
 			count++;
 		}
+		else {
+			break;
+		}
+
 	}
+
+	//for (iter = holeLst.begin() + holeLst.size() / 3; iter != (holeLst.end() - (holeLst.size() / 3)); iter++) {
+	//	//sum += holeLst[i].rect.width;
+	//	if (iter->valid && iter->numDetections > 10 &&) {
+	//		sum += iter->rect.width;
+	//		count++;
+	//	}
+	//}
 
 	if (count > 0) {
 		avgSizeLst.push_back(sum / count);
@@ -309,15 +293,29 @@ bool compareRectSize(Hole i, Hole j) {
 	return (i.rect.width < j.rect.width);
 }
 
+bool detectNumSort(Hole i, Hole j) {
+	return (i.numDetections > j.numDetections);
+}
+
 circle_fit::circle_t getCircle(vector<Hole> &holeLst)
 {
 	circle_fit::points_t points;
+	int count = 0;
+	int d = AverageDia(holeLst);
 	for (int i = 0; i < holeLst.size(); i++) {
-		if (holeLst[i].valid && holeLst[i].numDetections > 10) {
-			points.push_back(circle_fit::point_t(holeLst[i].center.x, holeLst[i].center.y));
+		if (count > 5) {
+			break;
 		}
+		else {
+			if (holeLst[i].rect.width < (d+20)) {
+				points.push_back(circle_fit::point_t(holeLst[i].center.x, holeLst[i].center.y));
+				count++;
+			}
+		}
+		/*if (holeLst[i].valid && holeLst[i].numDetections > 10) {
+			points.push_back(circle_fit::point_t(holeLst[i].center.x, holeLst[i].center.y));
+		}*/
 		//cout << "(" + to_string(holeLst[i].center.x) + ", " + to_string(holeLst[i].center.y) + ") \n";
-
 	}
 	circle_fit::circle_t circle = circle_fit::fit(points);
 	for (size_t i = 0; i < holeLst.size(); i++)
@@ -326,8 +324,8 @@ circle_fit::circle_t getCircle(vector<Hole> &holeLst)
 		if (holeLst[i].valid) {
 			float calcRad = sqrt(pow(holeLst[i].center.x - circle.x, 2) + pow(holeLst[i].center.y - circle.y, 2));
 			float ratio = abs(calcRad / pcr);
-			cout << "ratio: " + to_string(ratio) << endl;
-			if (!(.8 < ratio && ratio < 1.2)) {
+			//cout << "ratio: " + to_string(ratio) << endl;
+			if (!(.85 < ratio && ratio < 1.15)) {
 				holeLst[i].valid = false;
 			}
 		}
@@ -337,7 +335,118 @@ circle_fit::circle_t getCircle(vector<Hole> &holeLst)
 	return circle;
 }
 
+string getHoleSize(const int& d) {
+	
+	if (40 < d && d < 90) {
+		return "1/4";
+	}
+	else
+	{
+		return "unknown";
+	}
+}
 
+void orderByQuad(vector<Hole>& goodHoles, circle_fit::circle_t& pcd) {
+
+	for (size_t i = 0; i < goodHoles.size(); i++)
+	{
+		if (goodHoles[i].valid) {
+			// q1
+			if ((goodHoles[i].center.x >= pcd.x) && (goodHoles[i].center.y <= pcd.y)) {
+				goodHoles[i].quad = 1;
+			}
+			else if ((goodHoles[i].center.x < pcd.x) && (goodHoles[i].center.y < pcd.y)) {
+				goodHoles[i].quad = 2;
+			}
+			else if ((goodHoles[i].center.x <= pcd.x) && (goodHoles[i].center.y > pcd.y)) {
+				goodHoles[i].quad = 3;
+			}
+			else if ((goodHoles[i].center.x > pcd.x) && (goodHoles[i].center.y > pcd.y)) {
+				goodHoles[i].quad = 4;
+			}
+		}
+	}
+
+	std::sort(goodHoles.begin(), goodHoles.end(), sortQuad);	
+}
+
+int estimateHoleCount(vector<Hole>& goodHoles, circle_fit::circle_t& circle) {
+	// good holes should be sorted by quadrant before running this function
+	
+	vector<int> guesses;
+	float pi = 3.14159265;
+	float h = circle.x;
+	float r = circle.r;
+	float theta1 = std::acos((goodHoles[0].center.x - h) / r) * (180 / pi);
+	float theta2, delta;
+	float sum=0, count=1;
+	bool initialized = false;
+
+	for (size_t i = 0; i < goodHoles.size(); i++)
+	{
+		if (goodHoles[i].valid) {
+			if (!initialized) {
+				theta1 = std::acos((goodHoles[i].center.x - h) / r) * (180 / pi);
+				initialized = true;
+			}
+			else {
+				theta2 = acos((goodHoles[i].center.x - h) / r) * (180 / pi);
+				delta = theta2 - theta1;
+				guesses.push_back((int)abs(round(360 / delta)));
+				theta1 = theta2;
+			}
+			
+		}
+	}
+	std::unordered_map<int, int> dict;
+	int commonest;
+	int maxcount = 0;
+	for (int i : guesses) {
+		if (++dict[i] > maxcount) {
+			commonest = i;
+			maxcount = dict[i];
+		}
+	}
+
+	return commonest;
+}
+
+bool sortQuad(Hole i, Hole j) {
+	if (j.quad > i.quad) {
+		return true;
+	}
+	else if (j.quad < i.quad) {
+		return false;
+	}
+
+	if (j.quad == i.quad) {
+		if (j.quad == 1 || j.quad == 4) {
+			return(j.center.y < i.center.y);
+		}
+		else if (j.quad == 2 || j.quad == 3) {
+			return(j.center.y > i.center.y);
+		}
+		else {
+			return false;
+		}
+	}
+}
+
+Point GetTextPoint(Hole& hole, circle_fit::circle_t& circle) {
+	float theta;
+	if (hole.quad == 1 || hole.quad == 2) {
+		theta = acos((hole.center.x - circle.x) / circle.r);
+	}
+	else {
+		theta = -acos((hole.center.x - circle.x) / circle.r);
+	}
+
+	int x = circle.x + (circle.r + 10)*cos(theta);
+	int y = circle.y + (circle.r + 10) *sin(theta);
+
+	return Point(x, y);
+	
+}
 
 
 
