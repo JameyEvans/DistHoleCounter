@@ -43,6 +43,7 @@ public:
 
 void detectAndDisplay(Mat frame);
 int PtDistance(const Point& center1, const Point& center2);
+bool getImgFromCam(VideoCapture& cap, int& imgCounter, string& path);
 
 vector<Hole> GetGoodHoles(vector<Rect> circuits, vector<int>& numDetections);
 int AverageDia(vector<Hole>& holeLst);
@@ -59,7 +60,7 @@ Point GetTextPoint(Hole& hole, circle_fit::circle_t& circle);
 CascadeClassifier circuit_cascade;
 string imageName;
 vector<int> avgSizeLst;
-ofstream logFile;
+ofstream logFile, counterFile;
 circle_fit::circle_t pcd;
 int d;
 
@@ -77,12 +78,33 @@ int main(int argc, const char** argv)
 		return -1;
 	};
 
+	VideoCapture cap(1); // open the default camera
+	if (!cap.isOpened()) {
+		cout << "Default camera was unable to be opened with VideoCapture(1)" << endl;
+		return -1;
+	}
+
 	logFile.open("log.txt");
+	int imgCounter = 0;
+	//counterFile.open("counterFile.txt");
+
+	ifstream input_file("counterFile.txt");
+	double tempVar;
+	vector<double> tempVector;
+
+	if (input_file.good()) {		
+		while (input_file >> tempVar) {
+			tempVector.push_back(tempVar);
+		}
+		if (tempVector.size() > 0) {
+			imgCounter = (int)tempVector[0];
+		}		
+	}
 
 	Mat frame;
-	string path = "./images/testImages/quarter_021219";
+	string path = "./images/testImages/webcam";
 
-	for (int i = 1; i < 200; i++)
+	/*for (int i = 1; i < 200; i++)
 	{
 		imageName = path + "/dist" + to_string(i) + ".jpg";
 		frame = imread(imageName, IMREAD_COLOR);
@@ -95,12 +117,33 @@ int main(int argc, const char** argv)
 		detectAndDisplay(frame);
 		waitKey(0);
 		cvDestroyWindow(imageName.c_str());
+	}*/
+
+	while (getImgFromCam(cap, imgCounter, path))
+	{
+		imageName = path + "/dist" + to_string(imgCounter) + ".png";
+		frame = imread(imageName, IMREAD_COLOR);
+		//namedWindow("test");
+		//imshow("test", frame);
+		//waitKey(0);
+		if (frame.empty()) {
+			cout << "--(!) No captured frame -- Break!\n";
+			break;
+		}
+		resize(frame, frame, Size(frame.cols * 3, frame.rows * 3));
+ 		Mat frameOrg = frame.clone();
+		detectAndDisplay(frame);
+		waitKey(0);
+		cvDestroyWindow(imageName.c_str());
 	}
+	counterFile.open("counterFile.txt");
+	counterFile << imgCounter;
+	counterFile.close();
 	for (size_t i = 0; i < avgSizeLst.size(); i++)
 	{
 		logFile << "Average size: " + to_string(avgSizeLst[i]) << endl;
 	}
-
+	cap.release();
 	return 0;
 }
 
@@ -111,6 +154,40 @@ static int PtDistance(const Point& center1, const Point& center2)
 	float deltaY = center2.y - center1.y;
 
 	return sqrt(pow(deltaX, 2) + pow(deltaY, 2));
+}
+
+bool getImgFromCam(VideoCapture& cap, int & imgCounter, string& path)
+{
+	//VideoCapture cap(1); // open the default camera
+	//if (!cap.isOpened()) {
+	//	cout << "Default camera was unable to be opened with VideoCapture(0)" << endl;
+	//	return false;
+	//}
+
+	namedWindow("cam preview", WINDOW_NORMAL);
+	for (;;) {
+		Mat camFrame;
+		cap >> camFrame;  // get a new frame from camera
+		imshow("cam preview", camFrame);
+		int i = waitKey(1);
+		if (i == 27) {
+			// escape key pressed
+			cout << "Escape hit, closing ..." << endl;
+			return false;
+		}
+		else if(i > 0) {
+			// some other button pressed
+			imgCounter++;
+			string imgName = path + "/dist" + to_string(imgCounter) + ".png";
+			imwrite(imgName, camFrame);
+			cout << imgName + " written!" << endl;
+			destroyWindow("cam preview");
+			break;
+		}
+	}
+	//cap.release();
+		
+	return true;
 }
 
 Point GetCenterPoint(Rect& circuit) {
@@ -372,7 +449,9 @@ void orderByQuad(vector<Hole>& goodHoles, circle_fit::circle_t& pcd) {
 
 int estimateHoleCount(vector<Hole>& goodHoles, circle_fit::circle_t& circle) {
 	// good holes should be sorted by quadrant before running this function
-	
+	if (goodHoles.size() == 0) {
+		return 0;
+	}
 	vector<int> guesses;
 	float pi = 3.14159265;
 	float h = circle.x;
