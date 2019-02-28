@@ -314,7 +314,6 @@ Mat detectHoles(Mat frame)
 	cvtColor(frame, frame, COLOR_BGR2GRAY);
 	cvtColor(frame, frame, CV_GRAY2RGB);
 	equalizeHist(frame_gray, frame_gray);
-	Mat frame_copy = frame.clone();
 
 	//-- Detect circuit holes in distributor
 	std::vector<Rect> circuits;
@@ -336,14 +335,14 @@ Mat detectHoles(Mat frame)
 	{
 		if (circuitHoles[i].valid) {
 			holeCount++;
-			cout << "id " + patch::to_string(holeCount) + ": ";
-			cout << "(" + patch::to_string(circuitHoles[i].center.x) + ", " + patch::to_string(circuitHoles[i].center.y) + ", " + to_string(circuitHoles[i].rect.width) + ")\n";
+			//cout << "id " + patch::to_string(holeCount) + ": ";
+			//cout << "(" + patch::to_string(circuitHoles[i].center.x) + ", " + patch::to_string(circuitHoles[i].center.y) + ", " + to_string(circuitHoles[i].rect.width) + ")\n";
 
-			String textBox = " " + patch::to_string(holeCount);
-			Size textSize = getTextSize(textBox, FONT_HERSHEY_SIMPLEX, 1, 2, 0);
-			Point textLoc = Point(circuitHoles[i].center.x - (textSize.width / 2), circuitHoles[i].center.y + (textSize.height / 2));
+			String textBox = patch::to_string(holeCount);
+			Size textSize = getTextSize(textBox, FONT_HERSHEY_SIMPLEX, .3, 1, 0);
+			Point textLoc = Point(circuitHoles[i].center.x - (textSize.width / 2.), circuitHoles[i].center.y + (textSize.height / 2.));
 
-			putText(frame, textBox, textLoc, FONT_HERSHEY_SIMPLEX, .5, Scalar(51, 153, 45), 2);
+			putText(frame, textBox, textLoc, FONT_HERSHEY_SIMPLEX, .3, Scalar(51, 153, 45), 1);
 			ellipse(frame, circuitHoles[i].center, Size(circuitHoles[i].rect.width / 2, circuitHoles[i].rect.height / 2), 0, 0, 360, Scalar(255, 0, 255), 2); //was 20
 		}
 
@@ -418,7 +417,7 @@ int main()
 		return -1;
 	};
 
-	VideoCapture cap(0); // open the default camera; default = 0
+	VideoCapture cap(1); // open the default camera; default = 0
 	if (!cap.isOpened()) {
 		cout << "Default camera was unable to be opened with VideoCapture(0)" << endl;
 		return -1;
